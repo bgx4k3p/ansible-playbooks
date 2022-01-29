@@ -1,0 +1,10 @@
+- name: 'Update All Chocolatey Packages'
+  hosts: '{{ target_hosts }}'   # pass variable hosts from Ansible inventory
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_server_cert_validation: ignore
+  tasks:
+    - name: 'Update All Packages'
+      win_chocolatey:
+          name: all
+          state: latest

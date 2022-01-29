@@ -1,0 +1,33 @@
+---
+- name: 'Install updates on Ubuntu/Debian hosts'
+  hosts: '{{ target_hosts }}'   # pass variable hosts from Ansible inventory
+  become: true
+  become_user: root
+  tasks:
+    - name: 'Update apt repo and cache on all Debian/Ubuntu boxes'
+      apt: update_cache=yes     # apt-get update
+
+    - name: 'Upgrade all packages on servers'
+      apt: upgrade=dist         # apt-get upgrade
+
+    - name: 'Remove dependencies that are no longer required'
+      apt:
+        autoremove: yes         # apt-get autoremove
+
+    - name: 'Remove useless packages from the cache'
+      apt:
+        autoclean: yes          # apt-get autoclean
+
+    - name: 'Check if a reboot is needed'
+      register: reboot_required_file
+      stat: path=/var/run/reboot-required get_md5=no
+
+    - name: 'Reboot the host if kernel updated'
+      reboot:
+        msg: 'Reboot initiated by Ansible for kernel updates'
+        connect_timeout: 5
+        reboot_timeout: 300
+        pre_reboot_delay: 0
+        post_reboot_delay: 30
+        test_command: uptime
+      when: reboot_required_file.stat.exists

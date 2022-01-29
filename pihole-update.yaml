@@ -1,0 +1,14 @@
+---
+- name: 'Update PiHole'
+  hosts: pihole
+  vars:
+      ansible_python_interpreter: auto_legacy_silent
+  become: true
+  become_user: pihole
+  become_method: sudo
+  tasks:
+    - name: 'PiHole Update'
+      expect:
+        command: pihole -up
+        responses:
+          'password for pihole': '{{ pihole_pass }}'    # pass variable password at runtime

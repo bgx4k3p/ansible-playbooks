@@ -1,0 +1,14 @@
+---
+- name: 'Install Chocolatey'
+  hosts: '{{ target_hosts }}'   # pass variable hosts from Ansible inventory
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_server_cert_validation: ignore
+  tasks:
+    - name: 'Install Chocolatey'
+      win_chocolatey:
+          name:
+           - chocolatey
+           - chocolatey-core.extension
+           - chocolateygui
+          state: present

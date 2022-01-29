@@ -1,0 +1,15 @@
+---
+- name: 'Install Windows Updates'
+  hosts: '{{ target_hosts }}'   # pass variable hosts from Ansible inventory
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_server_cert_validation: ignore
+  tasks:
+    - name: 'Install Windows updates'
+      win_updates:
+        category_names:
+         - SecurityUpdates
+         - CriticalUpdates
+         - UpdateRollups
+         - DefinitionUpdates
+        reboot: yes
