@@ -47,7 +47,7 @@
       when: driver_download.changed
       
     - name: Install/Upgrade NVIDIA driver
-      shell: "{{ work_dir }}/{{ driver_filename }} --no-questions --ui=none --disable-nouveau"
+      shell: "{{ work_dir }}/{{ driver_filename }} --no-questions --ui=none --disable-nouveau --kernel-module-type=open"
       register: driver_install
       
     - name: Reboot system after driver installation
