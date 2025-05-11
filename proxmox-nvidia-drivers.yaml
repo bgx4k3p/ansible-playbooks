@@ -1,0 +1,75 @@
+---
+# Playbook to install/update NVIDIA drivers on Proxmox hosts
+# Usage: 
+#   ansible-playbook nvidia-driver-update.yml -e "proxmox_host=your-host driver_url=http://path-to-driver/NVIDIA-Linux-x86_64-XXX.XX.XX.run"
+# This playbook will always install/upgrade the driver and reboot the system.
+
+- name: 'Install/Update NVIDIA drivers on Proxmox'
+  hosts: "{{ proxmox_host }}"
+  become: true
+  vars:
+    # Default values - can be overridden with -e parameter
+    driver_url: "http://international.download.nvidia.com/XFree86/Linux-x86_64/575.51.02/NVIDIA-Linux-x86_64-575.51.02.run"
+    work_dir: "/tmp"
+    
+  tasks:
+    - name: Install kernel headers and build dependencies
+      apt:
+        name:
+          - pve-headers
+          - pkg-config
+          - libglvnd-dev
+          - nvtop
+          - dirmngr
+          - ca-certificates
+          - software-properties-common
+          - apt-transport-https
+          - dkms
+          - git
+        state: present
+        update_cache: yes
+      
+    - name: Extract driver filename from URL
+      set_fact:
+        driver_filename: "{{ driver_url | basename }}"
+      
+    - name: Download NVIDIA driver installer
+      get_url:
+        url: "{{ driver_url }}"
+        dest: "{{ work_dir }}/{{ driver_filename }}"
+        mode: '0755'
+      register: driver_download
+      
+    - name: Make driver installer executable
+      file:
+        path: "{{ work_dir }}/{{ driver_filename }}"
+        mode: '0755'
+      when: driver_download.changed
+      
+    - name: Install/Upgrade NVIDIA driver
+      shell: "{{ work_dir }}/{{ driver_filename }} --no-questions --ui=none --disable-nouveau"
+      register: driver_install
+      
+    - name: Reboot system after driver installation
+      reboot:
+        msg: "Reboot initiated by Ansible after NVIDIA driver installation"
+        connect_timeout: 5
+        reboot_timeout: 300
+        pre_reboot_delay: 0
+        post_reboot_delay: 30
+        test_command: uptime
+      
+    - name: Verify NVIDIA driver installation
+      shell: "nvidia-smi"
+      register: nvidia_smi_verify
+      failed_when: false
+      changed_when: false
+      
+    - name: Display NVIDIA driver status
+      debug:
+        msg: "{{ nvidia_smi_verify.stdout_lines }}"
+      
+    - name: Check if installation was successful
+      fail:
+        msg: "NVIDIA driver installation failed. Please check the logs."
+      when: nvidia_smi_verify.rc != 0
