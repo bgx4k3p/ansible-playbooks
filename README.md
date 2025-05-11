@@ -1,4 +1,4 @@
 Collection of Ansible Playbooks
 =====
 
-Tested with AWX Tower 19.5 and latest Ansible 
+Tested with AWX 24.6 and latest Ansible.
