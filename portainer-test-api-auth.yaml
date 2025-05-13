@@ -1,0 +1,29 @@
+---
+- name: Test Portainer Custom API Key Credential
+  hosts: localhost
+  gather_facts: false
+  vars:
+    portainer_url: '{{ portainer_url }}'  # Replace with your Portainer URL, i.e. "https://192.168.1.31:9443/" 
+    validate_certs: false                 # Set to true if your Portainer has a valid SSL certificate
+
+  tasks:
+    - name: Test Authentication with API Key
+      uri:
+        url: "{{ portainer_url }}/api/stacks"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ api_key }}"
+        return_content: yes
+        validate_certs: "{{ validate_certs }}"
+      register: stacks_response
+      failed_when: stacks_response.status >= 400
+
+    - name: Print Stacks (if authentication successful)
+      debug:
+        var: stacks_response.json
+      when: stacks_response.status < 400
+
+    - name: Authentication Failed
+      debug:
+        msg: "Authentication with the provided API key failed. Status code: {{ stacks_response.status }}, Content: {{ stacks_response.content }}"
+      when: stacks_response.status >= 400
