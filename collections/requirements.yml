@@ -1,4 +1,4 @@
 ---
 collections:
-# Install Chocolatey
 - chocolatey.chocolatey
+- community.docker
