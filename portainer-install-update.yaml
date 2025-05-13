@@ -13,34 +13,68 @@
     docker_socket: /var/run/docker.sock
 
   tasks:
-    - name: Get local Portainer image information
-      docker_image_info:
-        name: "{{ portainer_image }}:{{ portainer_tag }}"
-      register: local_image_info
-
-    - name: Get remote Portainer image information
-      uri:
-        url: "https://hub.docker.com/v2/repositories/{{ portainer_image }}/tags/{{ portainer_tag }}"
-        method: GET
-        return_content: yes
-      register: remote_image_info
-      become: false
+    # Get local image creation date
+    - name: Check if local Portainer image exists
+      command: docker images -q {{ portainer_image }}:{{ portainer_tag }}
+      register: local_image_exists
+      changed_when: false
       failed_when: false
 
-    - name: Set local and remote dates
-      set_fact:
-        local_created_at: "{{ local_image_info.images[0].Created if (local_image_info.images is defined and local_image_info.images | length > 0) else '' }}"
-        remote_created_at: "{{ remote_image_info.json.last_updated if (remote_image_info.status == 200 and remote_image_info.json is defined) else '' }}"
+    - name: Get local image creation date
+      shell: docker inspect -f {% raw %}'{{.Created}}'{% endraw %} {{ portainer_image }}:{{ portainer_tag }}
+      register: local_date_cmd
+      changed_when: false
+      failed_when: false
+      when: local_image_exists.stdout != ""
 
-    - name: Set update needed flag
+    - name: Set local date fact
+      set_fact:
+        local_date: "{{ local_date_cmd.stdout | default('') }}"
+      when: local_image_exists.stdout != ""
+
+    - name: Set empty local date if image doesn't exist
+      set_fact:
+        local_date: ""
+      when: local_image_exists.stdout == ""
+
+    # Get remote image update date
+    - name: Get remote image update date
+      shell: >
+        curl -s https://hub.docker.com/v2/repositories/{{ portainer_image }}/tags/{{ portainer_tag }} | 
+        grep -o '"last_updated":"[^"]*"' | 
+        cut -d'"' -f4
+      register: remote_date_cmd
+      changed_when: false
+      failed_when: false
+      become: false
+
+    - name: Set remote date fact
+      set_fact:
+        remote_date: "{{ remote_date_cmd.stdout }}"
+      when: remote_date_cmd.stdout != ""
+
+    # Show dates for debugging
+    - name: Show comparison dates for debugging
+      debug:
+        msg:
+          - "Local image date: {{ local_date | default('Not available') }}"
+          - "Remote image date: {{ remote_date | default('Not available') }}"
+
+    # Determine if update is needed
+    - name: Determine if update is needed
       set_fact:
         update_needed: >-
           {{ 
-            (local_created_at == '') or 
-            (remote_created_at != '' and local_created_at < remote_created_at) 
+            (local_date == '') or 
+            (local_date != '' and remote_date != '' and local_date < remote_date) 
           }}
 
-    - name: Pull Portainer CE image
+    - name: Show update decision
+      debug:
+        msg: "Update needed: {{ update_needed }}"
+
+    # Pull image if update is needed
+    - name: Pull latest Portainer image
       docker_image:
         name: "{{ portainer_image }}:{{ portainer_tag }}"
         source: pull
@@ -48,22 +82,50 @@
       when: update_needed | bool
       register: pull_result
 
-    - name: Check if container update is needed
-      set_fact:
-        container_update_needed: "{{ update_needed | bool or pull_result.changed }}"
+    # Get updated image date after pull
+    - name: Get updated image creation date after pull
+      shell: docker inspect -f {% raw %}'{{.Created}}'{% endraw %} {{ portainer_image }}:{{ portainer_tag }}
+      register: updated_date_cmd
+      changed_when: false
+      when: update_needed | bool
 
+    # Check if container exists
     - name: Check if Portainer container exists
-      shell: docker ps -a | grep -w "{{ portainer_container_name }}" || true
+      command: docker ps -a -q -f name={{ portainer_container_name }}
       register: container_exists
       changed_when: false
-      when: container_update_needed | bool
 
+    # Get container image
+    - name: Get container's current image
+      shell: docker inspect -f {% raw %}'{{.Config.Image}}'{% endraw %} {{ portainer_container_name }}
+      register: container_image_cmd
+      changed_when: false
+      failed_when: false
+      when: container_exists.stdout != ""
+
+    - name: Set container image fact
+      set_fact:
+        container_image: "{{ container_image_cmd.stdout | default('') }}"
+      when: container_exists.stdout != ""
+
+    # Force update container
+    - name: Set container needs recreation flag
+      set_fact:
+        recreate_container: >-
+          {{ 
+            update_needed | bool or 
+            container_exists.stdout == "" or 
+            container_image != portainer_image + ':' + portainer_tag
+          }}
+
+    # Remove container if it exists and needs recreation
     - name: Stop and remove existing Portainer container
       docker_container:
         name: "{{ portainer_container_name }}"
         state: absent
-      when: container_update_needed | bool and container_exists.stdout != ""
+      when: recreate_container | bool and container_exists.stdout != ""
 
+    # Create new container
     - name: Run Portainer CE container
       docker_container:
         name: "{{ portainer_container_name }}"
@@ -76,8 +138,23 @@
           - "{{ portainer_data_volume }}:/data"
         detach: true
         restart_policy: always
-      when: container_update_needed | bool
-      
-    - name: Show update status
+      when: recreate_container | bool
+
+    # Verify if the container is now running with the latest image
+    - name: Get final container image
+      shell: docker inspect -f {% raw %}'{{.Config.Image}}'{% endraw %} {{ portainer_container_name }}
+      register: final_container_image
+      changed_when: false
+      failed_when: false
+
+    - name: Get final image date
+      shell: docker inspect -f {% raw %}'{{.Created}}'{% endraw %} {{ portainer_image }}:{{ portainer_tag }}
+      register: final_image_date
+      changed_when: false
+
+    - name: Show final status
       debug:
-        msg: "Portainer {{ 'was updated to the latest version' if container_update_needed else 'is already running the latest version' }}"
+        msg: 
+          - "Container image: {{ final_container_image.stdout }}"
+          - "Image creation date: {{ final_image_date.stdout }}"
+          - "Status: Portainer {{ 'was updated to the latest version' if recreate_container | bool else 'is already running the latest version' }}"
