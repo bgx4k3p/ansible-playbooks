@@ -1,0 +1,66 @@
+---
+- name: Install and Update Portainer CE with Docker and Check for Updates
+  hosts: your_target_hosts  # Replace with your target host group or hostname
+  become: true
+
+  vars:
+    portainer_image: portainer/portainer-ce:latest
+    portainer_container_name: portainer
+    portainer_http_port: 8000
+    portainer_https_port: 9443
+    portainer_data_volume: portainer_data
+    docker_socket: /var/run/docker.sock
+
+  tasks:
+    - name: Get local Portainer image information
+      docker_image_info:
+        name: "{{ portainer_image }}"
+      register: local_image_info
+
+    - name: Get remote Portainer image information
+      uri:
+        url: "https://registry.hub.docker.com/v2/repositories/portainer/portainer-ce/tags/latest"
+        method: GET
+        return_content: yes
+      register: remote_image_info
+      become: false
+
+    - name: Compare local and remote image creation dates
+      set_fact:
+        local_created_at: "{{ local_image_info.images[0].Created if local_image_info.images else None }}"
+        remote_created_at: "{{ remote_image_info.json.results[0].last_updated if remote_image_info.json.results else None }}"
+
+    - name: Check if local image is older than the latest remote image
+      debug:
+        msg: "Local Portainer image is older than the latest."
+      when: local_created_at is defined and remote_created_at is defined and local_created_at < remote_created_at
+
+    - name: Pull Portainer CE image (if older or not present)
+      docker_image:
+        name: "{{ portainer_image }}"
+        state: present
+      when: local_created_at is not defined or (local_created_at is defined and remote_created_at is defined and local_created_at < remote_created_at)
+
+    - name: Stop existing Portainer container (if running)
+      docker_container:
+        name: "{{ portainer_container_name }}"
+        state: stopped
+      ignore_errors: true  # Don't fail if the container doesn't exist
+
+    - name: Remove existing Portainer container (if it exists)
+      docker_container:
+        name: "{{ portainer_container_name }}"
+        state: absent
+
+    - name: Run Portainer CE container
+      docker_container:
+        name: "{{ portainer_container_name }}"
+        image: "{{ portainer_image }}"
+        ports:
+          - "{{ portainer_http_port }}:{{ portainer_http_port }}"
+          - "{{ portainer_https_port }}:{{ portainer_https_port }}"
+        volumes:
+          - "{{ docker_socket }}:{{ docker_socket }}"
+          - "{{ portainer_data_volume }}:/data"
+        detach: true
+        restart_policy: always
