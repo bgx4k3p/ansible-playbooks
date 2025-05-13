@@ -1,0 +1,67 @@
+---
+# process_stack.yaml - Tasks to process and update a single Portainer stack
+# This file is included by the main playbook
+
+- name: Get stack details
+  uri:
+    url: "{{ portainer_url }}/api/stacks/{{ current_stack.Id }}"
+    method: GET
+    headers:
+      X-API-Key: "{{ api_key }}"
+    return_content: yes
+    validate_certs: "{{ validate_certs }}"
+  register: stack_details
+
+- name: Parse compose file
+  set_fact:
+    compose_content: "{{ stack_details.json.Content | from_yaml }}"
+  ignore_errors: yes
+
+- name: Initialize service images list
+  set_fact:
+    service_images: []
+  changed_when: false
+
+- name: Build service images list
+  set_fact:
+    service_images: "{{ service_images + [{'name': service.key, 'image': service.value.image}] }}"
+  loop: "{{ compose_content.services | default({}) | dict2items }}"
+  loop_control:
+    loop_var: service
+  when: service.value.image is defined
+
+- name: Show services found in stack
+  debug:
+    msg: "Found service: {{ current_stack.Name }} - {{ item.name }} - Image: {{ item.image }}"
+  loop: "{{ service_images }}"
+  
+- name: Process each service
+  include_tasks: tasks/process_service.yaml
+  loop: "{{ service_images }}"
+  loop_control:
+    loop_var: current_service
+    label: "{{ current_stack.Name }} - {{ current_service.name }}"
+
+- name: Check if any service needs update
+  set_fact:
+    stack_needs_update: "{{ service_images | selectattr('needs_update', 'defined') | selectattr('needs_update') | list | length > 0 }}"
+  
+- name: Update stack if needed
+  uri:
+    url: "{{ portainer_url }}/api/stacks/{{ current_stack.Id }}"
+    method: PUT
+    headers:
+      X-API-Key: "{{ api_key }}"
+    body_format: json
+    body:
+      stackFileContent: "{{ stack_details.json.Content }}"
+      env: "{{ stack_details.json.Env | default([]) }}"
+      prune: true
+      pullImage: true
+    validate_certs: "{{ validate_certs }}"
+  register: update_result
+  when: stack_needs_update | default(true)
+
+- name: Report update status
+  debug:
+    msg: "Stack {{ current_stack.Name }} {{ 'has been updated' if update_result.status is defined and update_result.status < 400 else 'did not need updating' }}"

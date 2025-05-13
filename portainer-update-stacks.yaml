@@ -1,0 +1,56 @@
+---
+- name: Update specified Portainer stacks with the latest container images
+  hosts: localhost
+  gather_facts: false
+  vars:
+    portainer_url: '{{ portainer_url }}'  # Replace with your Portainer URL, i.e. "https://192.168.1.31:9443/" 
+    validate_certs: false                 # Set to true if your Portainer has a valid SSL certificate
+    stacks_to_update: '{{ stacks_to_update | default([]) }}'  # List of stack names to update
+
+  tasks:
+    - name: Check if stacks_to_update is provided
+      debug:
+        msg: "No stacks specified in stacks_to_update. No action will be taken."
+      when: stacks_to_update | length == 0
+      
+    - name: Exit playbook if no stacks provided
+      meta: end_play
+      when: stacks_to_update | length == 0
+
+    - name: Get all stacks from Portainer
+      uri:
+        url: "{{ portainer_url }}/api/stacks"
+        method: GET
+        headers:
+          X-API-Key: "{{ api_key }}"
+        return_content: yes
+        validate_certs: "{{ validate_certs }}"
+      register: stacks_response
+      failed_when: stacks_response.status >= 400
+
+    - name: Filter stacks to update
+      set_fact:
+        filtered_stacks: "{{ stacks_response.json | selectattr('Name', 'in', stacks_to_update) | list }}"
+
+    - name: Show stacks to be processed
+      debug:
+        msg: "Will process stack: {{ item.Name }}"
+      loop: "{{ filtered_stacks }}"
+
+    - name: Check if any matching stacks were found
+      debug:
+        msg: "Warning: None of the specified stacks were found in Portainer."
+      when: filtered_stacks | length == 0
+
+    - name: Exit playbook if no matching stacks found
+      meta: end_play
+      when: filtered_stacks | length == 0
+
+    # Loop over each stack
+    - name: Process each stack
+      include_tasks: portainer/process_stack.yaml
+      loop: "{{ filtered_stacks }}"
+      loop_control:
+        loop_var: current_stack
+        label: "{{ current_stack.Name }}"
+

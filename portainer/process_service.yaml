@@ -1,0 +1,55 @@
+---
+# process_service.yaml - Tasks to process and check an individual service in a stack
+# This file is included by process_stack.yaml
+
+- name: Extract image name and tag
+  set_fact:
+    image_name: "{{ current_service.image.split(':')[0] }}"
+    image_tag: "{{ current_service.image.split(':')[1] | default('latest') }}"
+
+- name: Pull latest image
+  docker_image:
+    name: "{{ image_name }}"
+    tag: "{{ image_tag }}"
+    source: pull
+    force_source: yes
+
+- name: Get image ID of the latest pulled image
+  shell: docker inspect --format='{{ "{{.Id}}" }}' {{ image_name }}:{{ image_tag }}
+  register: latest_image_id
+  changed_when: false
+
+- name: Get current container ID
+  shell: docker ps -q --filter name={{ current_stack.Name }}_{{ current_service.name }}
+  register: container_id
+  changed_when: false
+  failed_when: false
+
+- name: Skip update check if no container running
+  set_fact:
+    update_service: true
+  when: container_id.stdout == ""
+
+- name: Get current container image ID
+  shell: docker inspect --format='{{ "{{.Image}}" }}' {{ container_id.stdout_lines[0] }}
+  register: container_image_id
+  when: container_id.stdout != ""
+  failed_when: false
+
+- name: Compare image IDs
+  set_fact:
+    update_service: "{{ latest_image_id.stdout != container_image_id.stdout | default('') }}"
+  when: container_id.stdout != ""
+
+- name: Mark service for update
+  set_fact:
+    service_images: "{{ service_images | map('combine', {'needs_update': update_service}) if service_images | map(attribute='name') | list | select('equalto', current_service.name) | list | length > 0 else service_images }}"
+  when: update_service is defined
+
+- name: Show update status
+  debug:
+    msg: 
+      - "Stack: {{ current_stack.Name }} - Service: {{ current_service.name }} - Image: {{ current_service.image }}"
+      - "Current image: {{ container_image_id.stdout | default('Not running') }}"
+      - "Latest image: {{ latest_image_id.stdout }}"
+      - "Update needed: {{ update_service | default(false) }}"
