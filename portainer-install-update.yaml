@@ -22,9 +22,11 @@
       register: image_pull
 
     - name: Get digest of the pulled image
-      shell: docker inspect --format='{% raw %}{{ index .RepoDigests 0 }}{% endraw %}' {{ portainer_image }}:{{ portainer_tag }}
+      shell: >
+        docker inspect --format='{% raw %}{{ index .RepoDigests 0 }}{% endraw %}' {{ portainer_image }}:{{ portainer_tag }}
       register: latest_image_digest
       changed_when: false
+
 
     - name: Check if container exists
       command: docker ps -a -q -f name=^/{{ portainer_container_name }}$
@@ -32,11 +34,13 @@
       changed_when: false
 
     - name: Get current container image digest
-      shell: docker inspect --format='{{ index .RepoDigests 0 }}' {{ portainer_container_name }}
+      shell: >
+        docker inspect --format='{% raw %}{{ index .RepoDigests 0 }}{% endraw %}' {{ portainer_container_name }}
       register: container_image_digest
       when: container_exists.stdout != ""
       changed_when: false
       failed_when: false
+
 
     - name: Determine if container needs update
       set_fact:
