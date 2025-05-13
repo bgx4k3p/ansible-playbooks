@@ -3,9 +3,9 @@
   become: true
   gather_facts: false
   vars:
-    portainer_url: '{{ portainer_url | default("") }}'        # Replace with your Portainer URL, i.e. "https://192.168.1.31:9443/" 
-    validate_certs: '{{ validate_certs | default(false) }}'   # Set to true if your Portainer has a valid SSL certificate
-    stacks_to_update: '{{ stacks_to_update | default([]) }}'  # List of stack names to update
+    portainer_url: '{{ portainer_url }}'        # Replace with your Portainer URL, i.e. "https://192.168.1.31:9443/" 
+    validate_certs: false                       # Set to true if your Portainer has a valid SSL certificate
+    stacks_to_update: '{{ stacks_to_update }}'  # List of stack names to update
 
   pre_tasks:
     - name: Check required variables
