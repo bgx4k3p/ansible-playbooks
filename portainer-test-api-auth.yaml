@@ -18,12 +18,14 @@
       register: stacks_response
       failed_when: stacks_response.status >= 400
 
-    - name: Print Stacks (if authentication successful)
+    - name: Print Stack names (if authentication successful)
       debug:
-        var: stacks_response.json
+        msg: "{{ item.Name }}"
+      loop: "{{ stacks_response.json }}"
       when: stacks_response.status < 400
 
     - name: Authentication Failed
       debug:
         msg: "Authentication with the provided API key failed. Status code: {{ stacks_response.status }}, Content: {{ stacks_response.content }}"
       when: stacks_response.status >= 400
+
