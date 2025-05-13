@@ -158,4 +158,3 @@
       loop: "{{ filtered_stacks }}"
       loop_control:
         label: "{{ item.Name }}"
-  
