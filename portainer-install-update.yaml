@@ -21,9 +21,9 @@
         force_source: yes
       register: image_pull
 
-    - name: Get image ID of the latest image
-      command: docker images -q {{ portainer_image }}:{{ portainer_tag }}
-      register: latest_image_id
+    - name: Get digest of the pulled image
+      shell: docker inspect --format='{{ index .RepoDigests 0 }}' {{ portainer_image }}:{{ portainer_tag }}
+      register: latest_image_digest
       changed_when: false
 
     - name: Check if container exists
@@ -31,9 +31,9 @@
       register: container_exists
       changed_when: false
 
-    - name: Get current container image ID
-      command: docker inspect -f '{{ "{{.Image}}" }}' {{ portainer_container_name }}
-      register: container_image_id
+    - name: Get current container image digest
+      shell: docker inspect --format='{{ index .RepoDigests 0 }}' {{ portainer_container_name }}
+      register: container_image_digest
       when: container_exists.stdout != ""
       changed_when: false
       failed_when: false
@@ -42,11 +42,18 @@
       set_fact:
         recreate_container: >-
           {{ 
-            container_exists.stdout == "" or 
-            (container_image_id.stdout | default('')) != (latest_image_id.stdout | default(''))
+            container_exists.stdout == "" or
+            (container_image_digest.stdout | default('')) != (latest_image_digest.stdout | default(''))
           }}
 
-    - name: Stop and remove old container if needed
+    - name: Show digest comparison
+      debug:
+        msg:
+          - "Latest image digest: {{ latest_image_digest.stdout }}"
+          - "Current container digest: {{ container_image_digest.stdout | default('Not running') }}"
+          - "Update required: {{ recreate_container }}"
+
+    - name: Stop and remove old Portainer container if needed
       docker_container:
         name: "{{ portainer_container_name }}"
         state: absent
@@ -65,6 +72,11 @@
         detach: true
         restart_policy: always
       when: recreate_container
+
+    - name: Clean up dangling images (optional but recommended)
+      shell: docker image prune -f
+      when: recreate_container
+      changed_when: false
 
     - name: Show final status
       debug:
