@@ -1,5 +1,5 @@
 ---
-- name: Install and Update Portainer CE with Docker and Check for Updates
+- name: Install and Update Portainer CE with Docker
   hosts: '{{ target_hosts }}'
   become: true
 
@@ -48,7 +48,7 @@
       debug:
         msg:
           - "Latest image ID: {{ latest_image_id.stdout }}"
-          - "Current container image ID: {{ container_image_id.stdout | default('N/A') }}"
+          - "Running container image ID: {{ container_image_id.stdout | default('N/A') }}"
           - "Recreate container: {{ recreate_container }}"
 
     - name: Stop and remove existing Portainer container
@@ -74,4 +74,4 @@
     - name: Final confirmation
       debug:
         msg:
-          - "Portainer container was {{ 'recreated with new image' if recreate_container else 'already up-to-date' }}."
+          - "Portainer container {{ 'was recreated with new image' if recreate_container else 'is already up-to-date' }}."
