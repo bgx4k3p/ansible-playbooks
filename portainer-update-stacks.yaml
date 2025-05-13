@@ -1,13 +1,21 @@
----
 - name: Update specified Portainer stacks with the latest container images
-  hosts: localhost
+  hosts: '{{ target_hosts | default("localhost") }}'
+  become: true
   gather_facts: false
   vars:
-    portainer_url: '{{ portainer_url }}'  # Replace with your Portainer URL, i.e. "https://192.168.1.31:9443/" 
-    validate_certs: false                 # Set to true if your Portainer has a valid SSL certificate
+    portainer_url: '{{ portainer_url | default("") }}'        # Replace with your Portainer URL, i.e. "https://192.168.1.31:9443/" 
+    validate_certs: '{{ validate_certs | default(false) }}'   # Set to true if your Portainer has a valid SSL certificate
     stacks_to_update: '{{ stacks_to_update | default([]) }}'  # List of stack names to update
 
-  tasks:
+  pre_tasks:
+    - name: Check required variables
+      fail:
+        msg: "Required variable '{{ item }}' is not defined"
+      when: vars[item] | default("") == ""
+      loop:
+        - portainer_url
+        - api_key
+
     - name: Check if stacks_to_update is provided
       debug:
         msg: "No stacks specified in stacks_to_update. No action will be taken."
@@ -17,6 +25,7 @@
       meta: end_play
       when: stacks_to_update | length == 0
 
+  tasks:
     - name: Get all stacks from Portainer
       uri:
         url: "{{ portainer_url }}/api/stacks"
@@ -48,9 +57,8 @@
 
     # Loop over each stack
     - name: Process each stack
-      include_tasks: portainer/process_stack.yaml
+      include_tasks: tasks/process_stack.yml
       loop: "{{ filtered_stacks }}"
       loop_control:
         loop_var: current_stack
         label: "{{ current_stack.Name }}"
-
