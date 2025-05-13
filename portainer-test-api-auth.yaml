@@ -12,7 +12,7 @@
         url: "{{ portainer_url }}/api/stacks"
         method: GET
         headers:
-          Authorization: "Bearer {{ api_key }}"
+          X-API-Key: "{{ api_key }}"
         return_content: yes
         validate_certs: "{{ validate_certs }}"
       register: stacks_response
