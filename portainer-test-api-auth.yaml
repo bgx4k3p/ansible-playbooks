@@ -20,12 +20,12 @@
 
     - name: Print Stack names (if authentication successful)
       debug:
-        msg: "{{ item.Name }}"
+        msg: "Stack name: {{ item.Name }}"
       loop: "{{ stacks_response.json }}"
       when: stacks_response.status < 400
 
     - name: Authentication Failed
       debug:
-        msg: "Authentication with the provided API key failed. Status code: {{ stacks_response.status }}, Content: {{ stacks_response.content }}"
+        msg: "Authentication with the provided API key failed. Status code: {{ stacks_response.status }}"
       when: stacks_response.status >= 400
 
