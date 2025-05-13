@@ -35,25 +35,34 @@
     - name: Set update needed flag
       set_fact:
         update_needed: >-
-          {{ local_created_at == '' or remote_created_at == '' or local_created_at < remote_created_at }}
+          {{ 
+            (local_created_at == '') or 
+            (remote_created_at != '' and local_created_at < remote_created_at) 
+          }}
 
     - name: Pull Portainer CE image
       docker_image:
         name: "{{ portainer_image }}:{{ portainer_tag }}"
         source: pull
         force_source: yes
-      when: update_needed
+      when: update_needed | bool
+      register: pull_result
+
+    - name: Check if container update is needed
+      set_fact:
+        container_update_needed: "{{ update_needed | bool or pull_result.changed }}"
 
     - name: Check if Portainer container exists
       shell: docker ps -a | grep -w "{{ portainer_container_name }}" || true
       register: container_exists
       changed_when: false
+      when: container_update_needed | bool
 
     - name: Stop and remove existing Portainer container
       docker_container:
         name: "{{ portainer_container_name }}"
         state: absent
-      when: container_exists.stdout != ""
+      when: container_update_needed | bool and container_exists.stdout != ""
 
     - name: Run Portainer CE container
       docker_container:
@@ -67,3 +76,8 @@
           - "{{ portainer_data_volume }}:/data"
         detach: true
         restart_policy: always
+      when: container_update_needed | bool
+      
+    - name: Show update status
+      debug:
+        msg: "Portainer {{ 'was updated to the latest version' if container_update_needed else 'is already running the latest version' }}"
