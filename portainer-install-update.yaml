@@ -1,6 +1,6 @@
 ---
 - name: Install and Update Portainer CE with Docker and Check for Updates
-  hosts: target_hosts  # Replace with your target host group or hostname
+  hosts: '{{ target_hosts }}'  # Replace with your target host group or hostname
   become: true
 
   vars:
