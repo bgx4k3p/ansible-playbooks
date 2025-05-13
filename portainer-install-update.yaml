@@ -1,5 +1,5 @@
 ---
-- name: Install and Update Portainer CE with Docker
+- name: Install and Update Portainer CE with Docker and Check for Updates
   hosts: '{{ target_hosts }}'
   become: true
 
@@ -13,57 +13,51 @@
     docker_socket: /var/run/docker.sock
 
   tasks:
+
     - name: Pull latest Portainer image
       docker_image:
         name: "{{ portainer_image }}"
         tag: "{{ portainer_tag }}"
         source: pull
         force_source: yes
-      register: image_pull
+      register: pulled_image
 
-    - name: Get digest of the pulled image
-      shell: >
-        docker inspect --format='{% raw %}{{ index .RepoDigests 0 }}{% endraw %}' {{ portainer_image }}:{{ portainer_tag }}
-      register: latest_image_digest
+    - name: Get image ID of the latest pulled image
+      shell: docker inspect --format='{{ "{{.Id}}" }}' {{ portainer_image }}:{{ portainer_tag }}
+      register: latest_image_id
       changed_when: false
 
-
-    - name: Check if container exists
-      command: docker ps -a -q -f name=^/{{ portainer_container_name }}$
+    - name: Check if Portainer container exists
+      command: docker ps -a -q -f name={{ portainer_container_name }}
       register: container_exists
       changed_when: false
 
-    - name: Get current container image digest
-      shell: >
-        docker inspect --format='{% raw %}{{ index .RepoDigests 0 }}{% endraw %}' {{ portainer_container_name }}
-      register: container_image_digest
+    - name: Get image ID of the currently running container
+      shell: docker inspect --format='{{ "{{.Image}}" }}' {{ portainer_container_name }}
+      register: container_image_id
       when: container_exists.stdout != ""
       changed_when: false
       failed_when: false
 
-
-    - name: Determine if container needs update
+    - name: Determine if container needs recreation
       set_fact:
         recreate_container: >-
-          {{ 
-            container_exists.stdout == "" or
-            (container_image_digest.stdout | default('')) != (latest_image_digest.stdout | default(''))
-          }}
+          {{ container_exists.stdout == "" or latest_image_id.stdout != container_image_id.stdout | default('') }}
 
-    - name: Show digest comparison
+    - name: Show image ID comparison
       debug:
         msg:
-          - "Latest image digest: {{ latest_image_digest.stdout }}"
-          - "Current container digest: {{ container_image_digest.stdout | default('Not running') }}"
-          - "Update required: {{ recreate_container }}"
+          - "Latest image ID: {{ latest_image_id.stdout }}"
+          - "Current container image ID: {{ container_image_id.stdout | default('N/A') }}"
+          - "Recreate container: {{ recreate_container }}"
 
-    - name: Stop and remove old Portainer container if needed
+    - name: Stop and remove existing Portainer container
       docker_container:
         name: "{{ portainer_container_name }}"
         state: absent
-      when: recreate_container
+      when: recreate_container | bool and container_exists.stdout != ""
 
-    - name: Deploy new Portainer container
+    - name: Run Portainer CE container
       docker_container:
         name: "{{ portainer_container_name }}"
         image: "{{ portainer_image }}:{{ portainer_tag }}"
@@ -75,14 +69,9 @@
           - "{{ portainer_data_volume }}:/data"
         detach: true
         restart_policy: always
-      when: recreate_container
+      when: recreate_container | bool
 
-    - name: Clean up dangling images (optional but recommended)
-      shell: docker image prune -f
-      when: recreate_container
-      changed_when: false
-
-    - name: Show final status
+    - name: Final confirmation
       debug:
-        msg: >-
-          Portainer container was {{ 'recreated and updated' if recreate_container else 'already up to date' }}.
+        msg:
+          - "Portainer container was {{ 'recreated with new image' if recreate_container else 'already up-to-date' }}."
