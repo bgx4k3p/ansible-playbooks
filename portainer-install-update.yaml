@@ -22,7 +22,7 @@
       register: image_pull
 
     - name: Get digest of the pulled image
-      shell: docker inspect --format='{{ index .RepoDigests 0 }}' {{ portainer_image }}:{{ portainer_tag }}
+      shell: docker inspect --format='{% raw %}{{ index .RepoDigests 0 }}{% endraw %}' {{ portainer_image }}:{{ portainer_tag }}
       register: latest_image_digest
       changed_when: false
 
