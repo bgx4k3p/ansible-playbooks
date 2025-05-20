@@ -1,24 +1,10 @@
 ---
-# process_stack.yaml - Tasks to process and update a single Portainer stack
-# This file is included by the main playbook
+# process_stack.yaml - Process a single Portainer stack
 
 - name: Find stack ID for {{ stack_name }}
   set_fact:
     current_stack: "{{ stacks_response.json | selectattr('Name', 'equalto', stack_name) | list | first | default({}) }}"
     stack_id: "{{ stacks_response.json | selectattr('Name', 'equalto', stack_name) | map(attribute='Id') | list | first | default('') }}"
-
-# Show basic stack info at normal verbosity
-- name: Processing stack
-  debug:
-    msg: "Processing stack: {{ stack_name }}"
-
-# Higher verbosity for detailed stack info
-- name: Debug current stack and ID
-  debug:
-    msg: 
-      - "Current stack: {{ current_stack }}"
-      - "Stack ID: {{ stack_id }}"
-    verbosity: 1
 
 - name: Exit if stack not found
   fail:
@@ -34,24 +20,7 @@
     return_content: true
   register: stack_details
 
-# Higher verbosity for technical details
-- name: Debug stack details
-  debug:
-    msg: "Stack details keys: {{ stack_details.json.keys() | list }}"
-    verbosity: 2
-
-# Higher verbosity for content field checks
-- name: Debug stack content field
-  debug:
-    msg:
-      - "Has StackFileContent: {{ stack_details.json.StackFileContent is defined }}"
-      - "Has stackFileContent: {{ stack_details.json.stackFileContent is defined }}"
-      - "Has content: {{ stack_details.json.content is defined }}"
-      - "Has Content: {{ stack_details.json.Content is defined }}"
-      - "Has Env: {{ stack_details.json.Env is defined }}"
-    verbosity: 2
-
-- name: Get stack file content from specific endpoint
+- name: Get stack file content from API
   uri:
     url: "{{ portainer_url }}/api/stacks/{{ stack_id }}/file"
     method: GET
@@ -59,12 +28,6 @@
     validate_certs: "{{ verify_ssl }}"
     return_content: true
   register: stack_file_response
-
-# Higher verbosity for response details
-- name: Debug stack file response
-  debug:
-    var: stack_file_response.json
-    verbosity: 2
 
 - name: Set stack content from appropriate field
   set_fact:
@@ -79,48 +42,25 @@
       stack_file_response.json.Content) | default('')
       }}"
 
-# Higher verbosity for content details
-- name: Debug final stack content
-  debug:
-    msg: "Stack content (truncated): {{ stack_content | string | truncate(100) }}"
-    verbosity: 1
-
 - name: Exit if no content found
   fail:
-    msg: "Could not find docker-compose content for stack {{ stack_name }}. Please check the Portainer API response."
+    msg: "Could not find docker-compose content for stack {{ stack_name }}"
   when: stack_content == ''
 
 - name: Parse docker-compose and extract images
   set_fact:
     compose_yaml: "{{ stack_content | from_yaml }}"
     stack_env_vars: "{{ stack_details.json.Env | default([]) }}"
-  ignore_errors: yes
-
-# Higher verbosity for YAML parsing details
-- name: Debug compose YAML
-  debug:
-    msg:
-      - "Compose YAML parsed: {{ compose_yaml is defined }}"
-      - "Has services: {{ compose_yaml.services is defined }}"
-      - "Service keys: {{ compose_yaml.services.keys() | list if compose_yaml.services is defined else [] }}"
-    verbosity: 1
 
 - name: Extract all service images
   set_fact:
     services: "{{ compose_yaml.services | default({}) }}"
   when: compose_yaml is defined and compose_yaml.services is defined
 
-# Higher verbosity for services details
-- name: Debug services
+- name: Log stack processing
   debug:
-    var: services
-    verbosity: 2
-
-# Normal verbosity for high-level info on services
-- name: Service count
-  debug:
-    msg: "Found {{ services | length }} services in stack {{ stack_name }}"
-  when: services is defined and services | length > 0
+    msg: "Processing stack '{{ stack_name }}' with {{ services | length }} services"
+  when: services is defined
 
 - name: Process each service with its image
   include_tasks: process_service.yaml

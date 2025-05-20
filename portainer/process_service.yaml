@@ -1,41 +1,32 @@
 ---
-# process_service.yaml - Tasks to process and check an individual service in a stack
-# This file is included by process_stack.yaml
+# process_service.yaml - Process a service and update if needed
 
 - name: Set service variables
   set_fact:
     service_name: "{{ service_item.key }}"
     service_config: "{{ service_item.value }}"
-    
-- name: Extract image from service
-  set_fact:
-    current_image: "{{ service_config.image }}"
-  when: service_config.image is defined
+    service_updated: false
 
-- name: Skip service if no image is defined
-  debug:
-    msg: "Skipping service {{ service_name }} - no image defined"
-  when: service_config.image is not defined
-  
+- name: Check if service has image
+  set_fact:
+    current_image: "{{ service_config.image | default('') }}"
+    
+- name: Skip if no image defined
+  meta: end_play
+  when: current_image == ''
+
 - name: Split image name and tag
   set_fact:
-    image_parts: "{{ current_image.split(':') }}"
     image_repository: "{{ current_image.split(':')[0] }}"
     image_tag: "{{ current_image.split(':')[1] | default('latest') }}"
-  when: current_image is defined
 
-# Essential output at normal verbosity
-- name: Log service image info
+- name: Log service being processed
   debug:
-    msg: "Processing: {{ service_name }} with image {{ current_image }} (Repository: {{ image_repository }}, Tag: {{ image_tag }})"
-  when: current_image is defined
-  
-- name: Create image pull body
-  set_fact:
-    pull_body:
-      Image: "{{ image_repository }}:latest"
-      PullPolicy: "allIfNotPresent"
-  when: image_repository is defined
+    msg: "Service: {{ service_name }}, Image: {{ current_image }}"
+
+- name: Skip if already using latest tag
+  meta: end_play
+  when: image_tag == 'latest'
 
 - name: Pull latest image via Portainer API
   uri:
@@ -46,120 +37,42 @@
     status_code: [200, 201, 204]
     timeout: 300
   register: pull_result
-  when: image_repository is defined and endpoint_id is defined
   ignore_errors: yes
 
-# Essential output at normal verbosity
-- name: Log image pull result
-  debug:
-    msg: "{{ 'Successfully' if pull_result.status | default(0) in [200, 201, 204] else 'Failed to' }} pull latest image for {{ image_repository }}"
-  when: pull_result is defined
-
-- name: Check if image was updated or retrieved
-  set_fact:
-    update_needed: "{{ (pull_result.status | default(0) in [200, 201, 204]) and image_tag != 'latest' }}"
-  when: image_repository is defined
-
-# Essential output at normal verbosity
-- name: Log update decision
-  debug:
-    msg: >-
-      Stack: {{ stack_name }}, Service: {{ service_name }}
-      {{ 'WILL be updated to use latest image' if update_needed | default(false) else 'does NOT need updates - already using latest' }}
-    
-- name: Update stack if newer image is available and current tag is not 'latest'
+- name: Update image if pull successful
   block:
-    - name: Creating updated docker-compose
-      debug:
-        msg: "Preparing to update service {{ service_name }} from {{ current_image }} to {{ image_repository }}:latest"
-
-    - name: Create updated services dictionary
-      set_fact:
-        updated_services: "{{ {} | combine({service_name: service_config | combine({'image': image_repository + ':latest'})}) }}"
-      when: update_needed | default(false)
-
     - name: Create updated compose dict
       set_fact:
-        updated_compose: "{{ compose_yaml | combine({'services': updated_services}, recursive=true) }}"
-      when: updated_services is defined
+        updated_services: "{{ {} | combine({service_name: service_config | combine({'image': image_repository + ':latest'})}) }}"
+        updated_compose: "{{ compose_yaml | combine({'services': {service_name: service_config | combine({'image': image_repository + ':latest'})}, recursive=true) }}"
+        service_updated: true
+      when: pull_result.status | default(0) in [200, 201, 204]
 
     - name: Convert updated compose to YAML
       set_fact:
         updated_stack_content: "{{ updated_compose | to_yaml }}"
-      when: updated_compose is defined
+      when: service_updated|bool
 
-    - name: Get stack update variables from stack details
-      set_fact:
-        stack_update_body:
-          StackFileContent: "{{ updated_stack_content }}"
-          Env: "{{ stack_env_vars | default([]) }}"
-          Prune: true
-          endpointId: "{{ endpoint_id }}"
-      when: updated_stack_content is defined
-
-    - name: Updating stack via Portainer API
-      debug:
-        msg: "Submitting update for stack {{ stack_name }} in Portainer..."
-
-    - name: Update stack with new docker-compose file (with extended timeout)
+    - name: Update stack in Portainer
       uri:
         url: "{{ portainer_url }}/api/stacks/{{ stack_id }}?endpointId={{ endpoint_id }}"
         method: PUT
         headers: "{{ headers }}"
         validate_certs: "{{ verify_ssl }}"
         body_format: json
-        body: "{{ stack_update_body }}"
+        body:
+          StackFileContent: "{{ updated_stack_content }}"
+          Env: "{{ stack_env_vars }}"
+          Prune: true
+          endpointId: "{{ endpoint_id }}"
         status_code: [200, 201, 204]
-        timeout: 600  # Increased timeout to 10 minutes
+        timeout: 600
       register: update_result
-      when: stack_update_body is defined
+      when: service_updated|bool
       ignore_errors: yes
 
-    # Essential output at normal verbosity
-    - name: Log stack update status
+    - name: Log update result
       debug:
-        msg: >-
-          Stack {{ stack_name }}, service {{ service_name }}: 
-          {{ 'Successfully updated to ' + image_repository + ':latest' 
-             if update_result.status is defined and update_result.status in [200, 201, 204] 
-             else 'Update FAILED or timed out' }}
-
-    - name: Try alternative update method if first attempt failed
-      block:
-        - name: Trying alternative update method
-          debug:
-            msg: "First update attempt failed. Trying an alternative method."
-
-        - name: Try updating stack with alternative API endpoint
-          uri:
-            url: "{{ portainer_url }}/api/stacks/{{ stack_id }}/update?endpointId={{ endpoint_id }}"
-            method: POST
-            headers: "{{ headers }}"
-            validate_certs: "{{ verify_ssl }}"
-            body_format: json
-            body: "{{ stack_update_body }}"
-            status_code: [200, 201, 204]
-            timeout: 600
-          register: alt_update_result
-          ignore_errors: yes
-
-        # Essential output at normal verbosity
-        - name: Log alternative update result
-          debug:
-            msg: >-
-              Alternative update method for stack {{ stack_name }}:
-              {{ 'Successful' if alt_update_result.status is defined and alt_update_result.status in [200, 201, 204] 
-                 else 'Failed or timed out' }}
-      when: update_result.status is not defined or update_result.status not in [200, 201, 204]
-
-    # Essential final output at normal verbosity
-    - name: Final update status
-      debug:
-        msg: >-
-          SUMMARY - Stack {{ stack_name }}, service {{ service_name }}: 
-          {{ 'Successfully updated to ' + image_repository + ':latest' 
-             if (update_result.status is defined and update_result.status in [200, 201, 204]) or 
-                (alt_update_result is defined and alt_update_result.status is defined and 
-                 alt_update_result.status in [200, 201, 204])
-             else 'All update attempts FAILED. You may need to update it manually in Portainer.' }}
-  when: update_needed | default(false)
+        msg: "{{ 'Successfully updated' if update_result.status|default(0) in [200, 201, 204] else 'Failed to update' }} stack '{{ stack_name }}', service '{{ service_name }}' to {{ image_repository }}:latest"
+      when: service_updated|bool
+  when: pull_result.status | default(0) in [200, 201, 204]

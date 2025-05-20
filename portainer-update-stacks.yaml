@@ -1,7 +1,5 @@
 ---
-# portainer-update-stacks.yaml - Check and update Portainer stacks
-# This playbook checks for the latest images of specified stacks in Portainer and updates them if necessary.
-# It uses the Portainer API to pull the latest images and update the stacks.
+# portainer-update-stacks.yaml - Check and update Portainer stacks with latest images
 
 - name: Update Portainer stacks with latest images
   hosts: localhost
@@ -39,15 +37,11 @@
         return_content: true
       register: endpoints_response
 
-    - name: Debug endpoints response
-      debug:
-        var: endpoints_response.json
-      when: endpoints_response.json is defined
-
     - name: Set endpoint ID (using the first endpoint)
       set_fact:
         endpoint_id: "{{ endpoints_response.json[0].Id }}"
       when: endpoints_response.json | length > 0
+      failed_when: endpoints_response.json | length == 0
 
     - name: Get stacks from Portainer
       uri:
@@ -58,13 +52,8 @@
         return_content: true
       register: stacks_response
 
-    - name: Debug stacks response
-      debug:
-        var: stacks_response.json
-      when: stacks_response.json is defined
-
     - name: Process each stack in the list
-      include_tasks: portainer/process_stack.yaml
+      include_tasks: process_stack.yaml
       loop: "{{ stacks_to_update }}"
       loop_control:
         loop_var: stack_name
