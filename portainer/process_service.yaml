@@ -2,54 +2,164 @@
 # process_service.yaml - Tasks to process and check an individual service in a stack
 # This file is included by process_stack.yaml
 
-- name: Extract image name and tag
+- name: Set service variables
   set_fact:
-    image_name: "{{ current_service.image.split(':')[0] }}"
-    image_tag: "{{ current_service.image.split(':')[1] | default('latest') }}"
-
-- name: Pull latest image
-  docker_image:
-    name: "{{ image_name }}"
-    tag: "{{ image_tag }}"
-    source: pull
-    force_source: yes
-
-- name: Get image ID of the latest pulled image
-  shell: docker inspect --format='{{ "{{.Id}}" }}' {{ image_name }}:{{ image_tag }}
-  register: latest_image_id
-  changed_when: false
-
-- name: Get current container ID
-  shell: docker ps -q --filter name={{ current_stack.Name }}_{{ current_service.name }}
-  register: container_id
-  changed_when: false
-  failed_when: false
-
-- name: Skip update check if no container running
+    service_name: "{{ service_item.key }}"
+    service_config: "{{ service_item.value }}"
+    
+- name: Extract image from service
   set_fact:
-    update_service: true
-  when: container_id.stdout == ""
+    current_image: "{{ service_config.image }}"
+  when: service_config.image is defined
 
-- name: Get current container image ID
-  shell: docker inspect --format='{{ "{{.Image}}" }}' {{ container_id.stdout_lines[0] }}
-  register: container_image_id
-  when: container_id.stdout != ""
-  failed_when: false
-
-- name: Compare image IDs
-  set_fact:
-    update_service: "{{ latest_image_id.stdout != container_image_id.stdout | default('') }}"
-  when: container_id.stdout != ""
-
-- name: Mark service for update
-  set_fact:
-    service_images: "{{ service_images | map('combine', {'needs_update': update_service}) if service_images | map(attribute='name') | list | select('equalto', current_service.name) | list | length > 0 else service_images }}"
-  when: update_service is defined
-
-- name: Show update status
+- name: Skip service if no image is defined
   debug:
-    msg: 
-      - "Stack: {{ current_stack.Name }} - Service: {{ current_service.name }} - Image: {{ current_service.image }}"
-      - "Current image: {{ container_image_id.stdout | default('Not running') }}"
-      - "Latest image: {{ latest_image_id.stdout }}"
-      - "Update needed: {{ update_service | default(false) }}"
+    msg: "Skipping service {{ service_name }} - no image defined"
+  when: service_config.image is not defined
+  
+- name: Split image name and tag
+  set_fact:
+    image_parts: "{{ current_image.split(':') }}"
+    image_repository: "{{ current_image.split(':')[0] }}"
+    image_tag: "{{ current_image.split(':')[1] | default('latest') }}"
+  when: current_image is defined
+
+# Essential output at normal verbosity
+- name: Log service image info
+  debug:
+    msg: "Processing: {{ service_name }} with image {{ current_image }} (Repository: {{ image_repository }}, Tag: {{ image_tag }})"
+  when: current_image is defined
+  
+- name: Create image pull body
+  set_fact:
+    pull_body:
+      Image: "{{ image_repository }}:latest"
+      PullPolicy: "allIfNotPresent"
+  when: image_repository is defined
+
+- name: Pull latest image via Portainer API
+  uri:
+    url: "{{ portainer_url }}/api/endpoints/{{ endpoint_id }}/docker/images/create?fromImage={{ image_repository }}&tag=latest"
+    method: POST
+    headers: "{{ headers }}"
+    validate_certs: "{{ verify_ssl }}"
+    status_code: [200, 201, 204]
+    timeout: 300
+  register: pull_result
+  when: image_repository is defined and endpoint_id is defined
+  ignore_errors: yes
+
+# Essential output at normal verbosity
+- name: Log image pull result
+  debug:
+    msg: "{{ 'Successfully' if pull_result.status | default(0) in [200, 201, 204] else 'Failed to' }} pull latest image for {{ image_repository }}"
+  when: pull_result is defined
+
+- name: Check if image was updated or retrieved
+  set_fact:
+    update_needed: "{{ (pull_result.status | default(0) in [200, 201, 204]) and image_tag != 'latest' }}"
+  when: image_repository is defined
+
+# Essential output at normal verbosity
+- name: Log update decision
+  debug:
+    msg: >-
+      Stack: {{ stack_name }}, Service: {{ service_name }}
+      {{ 'WILL be updated to use latest image' if update_needed | default(false) else 'does NOT need updates - already using latest' }}
+    
+- name: Update stack if newer image is available and current tag is not 'latest'
+  block:
+    - name: Creating updated docker-compose
+      debug:
+        msg: "Preparing to update service {{ service_name }} from {{ current_image }} to {{ image_repository }}:latest"
+
+    - name: Create updated services dictionary
+      set_fact:
+        updated_services: "{{ {} | combine({service_name: service_config | combine({'image': image_repository + ':latest'})}) }}"
+      when: update_needed | default(false)
+
+    - name: Create updated compose dict
+      set_fact:
+        updated_compose: "{{ compose_yaml | combine({'services': updated_services}, recursive=true) }}"
+      when: updated_services is defined
+
+    - name: Convert updated compose to YAML
+      set_fact:
+        updated_stack_content: "{{ updated_compose | to_yaml }}"
+      when: updated_compose is defined
+
+    - name: Get stack update variables from stack details
+      set_fact:
+        stack_update_body:
+          StackFileContent: "{{ updated_stack_content }}"
+          Env: "{{ stack_env_vars | default([]) }}"
+          Prune: true
+          endpointId: "{{ endpoint_id }}"
+      when: updated_stack_content is defined
+
+    - name: Updating stack via Portainer API
+      debug:
+        msg: "Submitting update for stack {{ stack_name }} in Portainer..."
+
+    - name: Update stack with new docker-compose file (with extended timeout)
+      uri:
+        url: "{{ portainer_url }}/api/stacks/{{ stack_id }}?endpointId={{ endpoint_id }}"
+        method: PUT
+        headers: "{{ headers }}"
+        validate_certs: "{{ verify_ssl }}"
+        body_format: json
+        body: "{{ stack_update_body }}"
+        status_code: [200, 201, 204]
+        timeout: 600  # Increased timeout to 10 minutes
+      register: update_result
+      when: stack_update_body is defined
+      ignore_errors: yes
+
+    # Essential output at normal verbosity
+    - name: Log stack update status
+      debug:
+        msg: >-
+          Stack {{ stack_name }}, service {{ service_name }}: 
+          {{ 'Successfully updated to ' + image_repository + ':latest' 
+             if update_result.status is defined and update_result.status in [200, 201, 204] 
+             else 'Update FAILED or timed out' }}
+
+    - name: Try alternative update method if first attempt failed
+      block:
+        - name: Trying alternative update method
+          debug:
+            msg: "First update attempt failed. Trying an alternative method."
+
+        - name: Try updating stack with alternative API endpoint
+          uri:
+            url: "{{ portainer_url }}/api/stacks/{{ stack_id }}/update?endpointId={{ endpoint_id }}"
+            method: POST
+            headers: "{{ headers }}"
+            validate_certs: "{{ verify_ssl }}"
+            body_format: json
+            body: "{{ stack_update_body }}"
+            status_code: [200, 201, 204]
+            timeout: 600
+          register: alt_update_result
+          ignore_errors: yes
+
+        # Essential output at normal verbosity
+        - name: Log alternative update result
+          debug:
+            msg: >-
+              Alternative update method for stack {{ stack_name }}:
+              {{ 'Successful' if alt_update_result.status is defined and alt_update_result.status in [200, 201, 204] 
+                 else 'Failed or timed out' }}
+      when: update_result.status is not defined or update_result.status not in [200, 201, 204]
+
+    # Essential final output at normal verbosity
+    - name: Final update status
+      debug:
+        msg: >-
+          SUMMARY - Stack {{ stack_name }}, service {{ service_name }}: 
+          {{ 'Successfully updated to ' + image_repository + ':latest' 
+             if (update_result.status is defined and update_result.status in [200, 201, 204]) or 
+                (alt_update_result is defined and alt_update_result.status is defined and 
+                 alt_update_result.status in [200, 201, 204])
+             else 'All update attempts FAILED. You may need to update it manually in Portainer.' }}
+  when: update_needed | default(false)

@@ -1,64 +1,70 @@
-- name: Update specified Portainer stacks with the latest container images
-  hosts: '{{ target_hosts | default("localhost") }}'
-  become: true
+---
+# portainer-update-stacks.yaml - Check and update Portainer stacks
+# This playbook checks for the latest images of specified stacks in Portainer and updates them if necessary.
+# It uses the Portainer API to pull the latest images and update the stacks.
+
+- name: Update Portainer stacks with latest images
+  hosts: localhost
+  connection: local
   gather_facts: false
+  
   vars:
-    portainer_url: '{{ portainer_url }}'        # Replace with your Portainer URL, i.e. "https://192.168.1.31:9443/" 
-    validate_certs: false                       # Set to true if your Portainer has a valid SSL certificate
-    stacks_to_update: '{{ stacks_to_update }}'  # List of stack names to update
-
+    portainer_url: ''
+    api_key: ''
+    stacks_to_update: []
+    verify_ssl: false
+    
   pre_tasks:
-    - name: Check required variables
-      fail:
-        msg: "Required variable '{{ item }}' is not defined"
-      when: vars[item] | default("") == ""
-      loop:
-        - portainer_url
-        - api_key
-
-    - name: Check if stacks_to_update is provided
-      debug:
-        msg: "No stacks specified in stacks_to_update. No action will be taken."
-      when: stacks_to_update | length == 0
-      
-    - name: Exit playbook if no stacks provided
-      meta: end_play
-      when: stacks_to_update | length == 0
+    - name: Validate required variables
+      assert:
+        that:
+          - portainer_url | length > 0
+          - api_key | length > 0
+          - stacks_to_update | length > 0
+        fail_msg: "Missing required variables. Please provide portainer_url, api_key, and stacks_to_update."
 
   tasks:
-    - name: Get all stacks from Portainer
+    - name: Set up headers for Portainer API
+      set_fact:
+        headers:
+          X-API-Key: "{{ api_key }}"
+          Content-Type: "application/json"
+
+    - name: Get endpoints from Portainer
+      uri:
+        url: "{{ portainer_url }}/api/endpoints"
+        method: GET
+        headers: "{{ headers }}"
+        validate_certs: "{{ verify_ssl }}"
+        return_content: true
+      register: endpoints_response
+
+    - name: Debug endpoints response
+      debug:
+        var: endpoints_response.json
+      when: endpoints_response.json is defined
+
+    - name: Set endpoint ID (using the first endpoint)
+      set_fact:
+        endpoint_id: "{{ endpoints_response.json[0].Id }}"
+      when: endpoints_response.json | length > 0
+
+    - name: Get stacks from Portainer
       uri:
         url: "{{ portainer_url }}/api/stacks"
         method: GET
-        headers:
-          X-API-Key: "{{ api_key }}"
-        return_content: yes
-        validate_certs: "{{ validate_certs }}"
+        headers: "{{ headers }}"
+        validate_certs: "{{ verify_ssl }}"
+        return_content: true
       register: stacks_response
-      failed_when: stacks_response.status >= 400
 
-    - name: Filter stacks to update
-      set_fact:
-        filtered_stacks: "{{ stacks_response.json | selectattr('Name', 'in', stacks_to_update) | list }}"
-
-    - name: Show stacks to be processed
+    - name: Debug stacks response
       debug:
-        msg: "Will process stack: {{ item.Name }}"
-      loop: "{{ filtered_stacks }}"
+        var: stacks_response.json
+      when: stacks_response.json is defined
 
-    - name: Check if any matching stacks were found
-      debug:
-        msg: "Warning: None of the specified stacks were found in Portainer."
-      when: filtered_stacks | length == 0
-
-    - name: Exit playbook if no matching stacks found
-      meta: end_play
-      when: filtered_stacks | length == 0
-
-    # Loop over each stack
-    - name: Process each stack
-      include_tasks: tasks/process_stack.yml
-      loop: "{{ filtered_stacks }}"
+    - name: Process each stack in the list
+      include_tasks: portainer/process_stack.yaml
+      loop: "{{ stacks_to_update }}"
       loop_control:
-        loop_var: current_stack
-        label: "{{ current_stack.Name }}"
+        loop_var: stack_name
