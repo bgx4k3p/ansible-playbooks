@@ -53,7 +53,7 @@
       register: stacks_response
 
     - name: Process each stack in the list
-      include_tasks: process_stack.yaml
+      include_tasks: portainer/process_stack.yaml
       loop: "{{ stacks_to_update }}"
       loop_control:
         loop_var: stack_name
