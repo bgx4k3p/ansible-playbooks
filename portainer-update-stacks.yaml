@@ -7,10 +7,11 @@
   gather_facts: false
   
   vars:
-    portainer_url: ''
-    api_key: ''
-    stacks_to_update: []
-    verify_ssl: false
+    portainer_url: ''       # Portainer URL, e.g. "https://192.168.1.31:9443"
+    api_key: ''             # Portainer API Key for authentication
+    stacks_to_update: []    # List of stack names to update, i.e. ['stack1', 'stack2']
+    verify_ssl: false       # Set to true if your Portainer has a valid SSL certificate
+    clean_up_images: true   # Set to true to clean up unused images
     
   pre_tasks:
     - name: Validate required variables
@@ -57,3 +58,9 @@
       loop: "{{ stacks_to_update }}"
       loop_control:
         loop_var: stack_name
+        label: "{{ stack_name }}"
+
+    # Use separate cleanup script
+    - name: Clean up unused Docker images
+      include_tasks: portainer/clean_up_images.yaml
+      when: clean_up_images | bool

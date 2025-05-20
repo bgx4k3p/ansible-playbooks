@@ -39,40 +39,43 @@
   register: pull_result
   ignore_errors: yes
 
-- name: Update image if pull successful
-  block:
-    - name: Create updated compose dict
-      set_fact:
-        updated_services: "{{ {} | combine({service_name: service_config | combine({'image': image_repository + ':latest'})}) }}"
-        updated_compose: "{{ compose_yaml | combine({'services': {service_name: service_config | combine({'image': image_repository + ':latest'})}, recursive=true) }}"
-        service_updated: true
-      when: pull_result.status | default(0) in [200, 201, 204]
-
-    - name: Convert updated compose to YAML
-      set_fact:
-        updated_stack_content: "{{ updated_compose | to_yaml }}"
-      when: service_updated|bool
-
-    - name: Update stack in Portainer
-      uri:
-        url: "{{ portainer_url }}/api/stacks/{{ stack_id }}?endpointId={{ endpoint_id }}"
-        method: PUT
-        headers: "{{ headers }}"
-        validate_certs: "{{ verify_ssl }}"
-        body_format: json
-        body:
-          StackFileContent: "{{ updated_stack_content }}"
-          Env: "{{ stack_env_vars }}"
-          Prune: true
-          endpointId: "{{ endpoint_id }}"
-        status_code: [200, 201, 204]
-        timeout: 600
-      register: update_result
-      when: service_updated|bool
-      ignore_errors: yes
-
-    - name: Log update result
-      debug:
-        msg: "{{ 'Successfully updated' if update_result.status|default(0) in [200, 201, 204] else 'Failed to update' }} stack '{{ stack_name }}', service '{{ service_name }}' to {{ image_repository }}:latest"
-      when: service_updated|bool
+# Fix for the syntax error in the combine filter
+- name: Create updated service config
+  set_fact:
+    updated_service_config: "{{ service_config | combine({'image': image_repository + ':latest'}) }}"
+    service_updated: true
   when: pull_result.status | default(0) in [200, 201, 204]
+
+- name: Create updated compose
+  set_fact:
+    updated_services: "{{ {service_name: updated_service_config} }}"
+    updated_compose: "{{ compose_yaml | combine({'services': {service_name: updated_service_config}}, recursive=true) }}"
+  when: service_updated|bool
+
+- name: Convert updated compose to YAML
+  set_fact:
+    updated_stack_content: "{{ updated_compose | to_yaml }}"
+  when: service_updated|bool
+
+- name: Update stack in Portainer
+  uri:
+    url: "{{ portainer_url }}/api/stacks/{{ stack_id }}?endpointId={{ endpoint_id }}"
+    method: PUT
+    headers: "{{ headers }}"
+    validate_certs: "{{ verify_ssl }}"
+    body_format: json
+    body:
+      StackFileContent: "{{ updated_stack_content }}"
+      Env: "{{ stack_env_vars }}"
+      Prune: true
+      endpointId: "{{ endpoint_id }}"
+    status_code: [200, 201, 204]
+    timeout: 600
+  register: update_result
+  when: service_updated|bool
+  ignore_errors: yes
+
+- name: Log update result
+  debug:
+    msg: "{{ 'Successfully updated' if update_result.status|default(0) in [200, 201, 204] else 'Failed to update' }} stack '{{ stack_name }}', service '{{ service_name }}' to {{ image_repository }}:latest"
+  when: service_updated|bool

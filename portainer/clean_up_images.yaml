@@ -1,0 +1,31 @@
+---
+# portainer/clean_up_images.yaml
+# Ultra simplified script to clean up unused container images
+
+- name: Get all Container images
+  uri:
+    url: "{{ portainer_url }}/api/endpoints/{{ endpoint_id }}/docker/images/json?all=1"
+    method: GET
+    headers: "{{ headers }}"
+    validate_certs: "{{ verify_ssl }}"
+    status_code: [200]
+  register: images_response
+
+- name: Remove unused images
+  uri:
+    url: "{{ portainer_url }}/api/endpoints/{{ endpoint_id }}/docker/images/{{ item.Id | regex_replace('^sha256:', '') }}"
+    method: DELETE
+    headers: "{{ headers }}"
+    validate_certs: "{{ verify_ssl }}"
+    status_code: [200, 201, 204, 404, 409]
+  register: cleanup_results
+  loop: "{{ images_response.json | selectattr('Containers', 'equalto', 0) | list }}"
+  loop_control:
+    label: "{{ item.RepoTags[0] if (item.RepoTags is defined and item.RepoTags|length > 0) else (item.Id | truncate(12, True, '')) }}"
+  when: images_response.json is defined
+  ignore_errors: yes
+
+- name: Report cleanup results
+  debug:
+    msg: "Removed {{ cleanup_results.results | selectattr('status', 'defined') | selectattr('status', 'in', [200, 201, 204]) | list | length }} unused images"
+  when: cleanup_results is defined
