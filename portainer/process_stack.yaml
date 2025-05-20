@@ -67,4 +67,5 @@
   loop: "{{ services | dict2items }}"
   loop_control:
     loop_var: service_item
+    label: "{{ service_item.key }}"
   when: services is defined and services | length > 0
