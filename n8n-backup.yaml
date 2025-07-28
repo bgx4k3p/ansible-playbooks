@@ -1,6 +1,6 @@
 ---
 - name: N8N Backup
-  hosts: all
+  hosts: '{{ target_hosts }}'   # pass variable hosts from Ansible inventory
   become: yes
   vars:
     # AWX Survey Variables (configure these in AWX job template)
