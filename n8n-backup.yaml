@@ -1,0 +1,101 @@
+---
+- name: N8N Backup
+  hosts: all
+  become: yes
+  vars:
+    # AWX Survey Variables (configure these in AWX job template)
+    n8n_installation_type: "{{ installation_type | default('docker') }}"
+    n8n_container_name: "{{ container_name | default('n8n') }}"
+    backup_dir: "{{ backup_location | default('/opt/n8n-backups') }}"
+    decrypted_backup: "{{ decrypt_credentials | default(false) | bool }}"
+    
+    # Internal variables
+    timestamp: "{{ ansible_date_time.year }}{{ ansible_date_time.month }}{{ ansible_date_time.day }}"
+    current_backup: "{{ backup_dir }}/backup-{{ timestamp }}"
+
+  tasks:
+    - name: Debug variables
+      debug:
+        msg: |
+          installation_type: {{ n8n_installation_type }}
+          container_name: {{ n8n_container_name }}
+          backup_dir: {{ backup_dir }}
+          current_backup: {{ current_backup }}
+
+    - name: Create credentials and workflows directories
+      file:
+        path: "{{ current_backup }}/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - credentials
+        - workflows
+
+    # Docker backup tasks
+    - name: Backup N8N credentials (Docker)
+      shell: |
+        {% if decrypted_backup %}
+        docker exec -u node {{ n8n_container_name }} n8n export:credentials --backup --decrypted --output=/tmp/credentials/
+        {% else %}
+        docker exec -u node {{ n8n_container_name }} n8n export:credentials --backup --output=/tmp/credentials/
+        {% endif %}
+        docker cp {{ n8n_container_name }}:/tmp/credentials/. {{ current_backup }}/credentials/
+      when: installation_type == "docker"
+
+    - name: Backup N8N workflows (Docker)
+      shell: |
+        docker exec -u node {{ n8n_container_name }} n8n export:workflow --backup --output=/tmp/workflows/
+        docker cp {{ n8n_container_name }}:/tmp/workflows/. {{ current_backup }}/workflows/
+      when: installation_type == "docker"
+
+    - name: Clean up temporary files in container
+      shell: docker exec -u node {{ n8n_container_name }} rm -rf /tmp/credentials /tmp/workflows
+      ignore_errors: yes
+      when: installation_type == "docker"
+
+    # NPM backup tasks
+    - name: Backup N8N credentials (NPM)
+      shell: |
+        {% if decrypted_backup %}
+        n8n export:credentials --backup --decrypted --output={{ current_backup }}/credentials/
+        {% else %}
+        n8n export:credentials --backup --output={{ current_backup }}/credentials/
+        {% endif %}
+      when: installation_type == "npm"
+
+    - name: Backup N8N workflows (NPM)
+      shell: n8n export:workflow --backup --output={{ current_backup }}/workflows/
+      when: installation_type == "npm"
+
+    - name: Create backup info file
+      copy:
+        content: |
+          N8N Backup Info
+          ===============
+          Date: {{ ansible_date_time.iso8601 }}
+          Host: {{ inventory_hostname }}
+          Type: {{ n8n_installation_type }}
+          Decrypted: {{ decrypted_backup }}
+          
+          Restore commands:
+          {% if installation_type == "docker" %}
+          docker cp credentials/ {{ n8n_container_name }}:/tmp/
+          docker cp workflows/ {{ n8n_container_name }}:/tmp/
+          docker exec {{ n8n_container_name }} n8n import:credentials --separate --input=/tmp/credentials/
+          docker exec {{ n8n_container_name }} n8n import:workflow --separate --input=/tmp/workflows/
+          {% else %}
+          n8n import:credentials --separate --input={{ current_backup }}/credentials/
+          n8n import:workflow --separate --input={{ current_backup }}/workflows/
+          {% endif %}
+        dest: "{{ current_backup }}/README.txt"
+
+    - name: Cleanup old backups (keep last 10)
+      shell: |
+        cd {{ backup_dir }}
+        ls -1t backup-* | tail -n +11 | xargs -r rm -rf
+      ignore_errors: yes
+
+    - name: Display backup location
+      debug:
+        msg: "Backup completed: {{ current_backup }}"
+
